@@ -1,0 +1,9 @@
+streamlit>=1.24.0
+pandas>=1.5.0
+mysql-connector-python>=8.0.0
+psycopg2-binary>=2.9.0
+watchdog>=2.0.0
+schedule>=1.0.0
+requests>=2.25.0
+# Use pre-built wheels and avoid compilation issues
+--prefer-binary 

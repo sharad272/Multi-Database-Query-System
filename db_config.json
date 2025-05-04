@@ -1,0 +1,32 @@
+[
+  {
+    "name": "sales_db",
+    "type": "sqlite",
+    "path": "databases/sales.db"
+  },
+  {
+    "name": "customers_db",
+    "type": "sqlite",
+    "path": "databases/customers.db"
+  },
+  {
+    "name": "inventory_db",
+    "type": "sqlite",
+    "path": "databases/inventory.db"
+  },
+  {
+    "name": "customers_db",
+    "type": "sqlite",
+    "path": "databases\\customers.db"
+  },
+  {
+    "name": "inventory_db",
+    "type": "sqlite",
+    "path": "databases\\inventory.db"
+  },
+  {
+    "name": "sales_db",
+    "type": "sqlite",
+    "path": "databases\\sales.db"
+  }
+]

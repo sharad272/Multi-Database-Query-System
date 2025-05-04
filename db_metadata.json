@@ -1,0 +1,45 @@
+{
+  "sales_db": {
+    "orders": [
+      "order_id",
+      "customer_id",
+      "order_date",
+      "total_amount"
+    ],
+    "order_items": [
+      "item_id",
+      "order_id",
+      "product_id",
+      "quantity",
+      "price"
+    ]
+  },
+  "customers_db": {
+    "customers": [
+      "customer_id",
+      "first_name",
+      "last_name",
+      "email",
+      "phone",
+      "address",
+      "city",
+      "state",
+      "zip_code"
+    ]
+  },
+  "inventory_db": {
+    "products": [
+      "product_id",
+      "name",
+      "description",
+      "price",
+      "category"
+    ],
+    "inventory": [
+      "inventory_id",
+      "product_id",
+      "quantity",
+      "location"
+    ]
+  }
+}
