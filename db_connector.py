@@ -1,6 +1,7 @@
 import sqlite3
 import mysql.connector
 import psycopg2
+import re
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 
@@ -236,14 +237,55 @@ class DatabaseConnector:
             logger.error(f"Database connection {db_name} not found")
             return False, "Database connection not found"
         
-        conn = self.connections[db_name]['connection']
+        conn_info = self.connections[db_name]
+        conn = conn_info['connection']
+        db_type = conn_info['type']
         
         try:
+            # Log the original query we're trying to execute
+            logger.info(f"Original query to execute on {db_name}: {query}")
+            
+            # Clean up the query - normalize whitespace but preserve the query
+            query = query.strip()
+            
+            # Apply database-specific adaptations without changing the query's intent
+            adapted_query = query
+            
+            if db_type == 'sqlite':
+                # SQLite specific adaptations
+                
+                # Handle date functions that are SQL Server/MySQL specific but not in SQLite
+                if 'GETDATE()' in adapted_query.upper():
+                    adapted_query = adapted_query.replace('GETDATE()', "date('now')")
+                    adapted_query = adapted_query.replace('getdate()', "date('now')")
+                    logger.info(f"Adapted GETDATE() to SQLite syntax: {adapted_query}")
+                
+                # Handle TOP syntax which is SQL Server specific
+                if 'TOP ' in adapted_query.upper() and ' LIMIT ' not in adapted_query.upper():
+                    # Extract the TOP value and convert to LIMIT
+                    top_match = re.search(r'TOP\s+(\d+)', adapted_query, re.IGNORECASE)
+                    if top_match:
+                        top_value = top_match.group(1)
+                        # Remove TOP clause and add LIMIT at the end
+                        adapted_query = re.sub(r'TOP\s+\d+', '', adapted_query, flags=re.IGNORECASE)
+                        adapted_query = f"{adapted_query} LIMIT {top_value}"
+                        logger.info(f"Converted TOP to LIMIT for SQLite: {adapted_query}")
+                
+                # Fix comparison operators < and > which can cause syntax errors in SQLite
+                # This issue happens because SQLite can sometimes parse these characters as XML tags
+                # Add spaces around these operators to prevent this issue
+                adapted_query = self._fix_comparison_operators(adapted_query)
+            
+            # Log the adapted query
+            if adapted_query != query:
+                logger.info(f"Adapted query for {db_type}: {adapted_query}")
+            
+            # Execute the adapted query
             cursor = conn.cursor()
-            cursor.execute(query)
+            cursor.execute(adapted_query)
             
             # Check if this is a SELECT query (has results to fetch)
-            if query.strip().lower().startswith("select"):
+            if adapted_query.strip().lower().startswith("select"):
                 columns = [desc[0] for desc in cursor.description]
                 results = cursor.fetchall()
                 return True, {"columns": columns, "data": results}
@@ -251,9 +293,92 @@ class DatabaseConnector:
                 conn.commit()
                 return True, f"Query executed successfully. Rows affected: {cursor.rowcount}"
                 
+        except sqlite3.OperationalError as e:
+            error_msg = str(e)
+            logger.error(f"SQLite error executing query on {db_name}: {error_msg}")
+            
+            # Special handling for < and > operators in WHERE clauses
+            if "syntax error" in error_msg and ("<" in error_msg or ">" in error_msg):
+                try:
+                    # Try to fix comparison operators and retry
+                    fixed_query = self._fix_comparison_operators(query, aggressive=True)
+                    logger.info(f"Retrying with fixed comparison operators: {fixed_query}")
+                    
+                    if fixed_query != query:
+                        # Try executing with the fixed query
+                        cursor = conn.cursor()
+                        cursor.execute(fixed_query)
+                        
+                        # Check if this is a SELECT query (has results to fetch)
+                        if fixed_query.strip().lower().startswith("select"):
+                            columns = [desc[0] for desc in cursor.description]
+                            results = cursor.fetchall()
+                            return True, {"columns": columns, "data": results}
+                        else:
+                            conn.commit()
+                            return True, f"Query executed successfully. Rows affected: {cursor.rowcount}"
+                except Exception as inner_e:
+                    logger.error(f"Error executing query with fixed operators: {inner_e}")
+            
+            # If it's a syntax error, but we're not going to auto-fallback anymore
+            # We'll let the error propagate to the UI so the user can see exactly what went wrong
+            return False, f"SQLite error: {error_msg}"
+        
         except Exception as e:
             logger.error(f"Error executing query on {db_name}: {e}")
             return False, str(e)
+    
+    def _fix_comparison_operators(self, query: str, aggressive: bool = False) -> str:
+        """
+        Fix potential issues with comparison operators in SQLite
+        
+        Args:
+            query: The SQL query to fix
+            aggressive: Whether to use more aggressive fixing (for retry attempts)
+            
+        Returns:
+            Fixed SQL query
+        """
+        fixed_query = query
+        
+        # Ensure spaces around comparison operators
+        # For < and > which can be misinterpreted as XML tags
+        comparison_operators = ['<', '>', '<=', '>=', '<>', '!=', '=']
+        
+        if aggressive:
+            # More aggressive replacement for retry attempts
+            for op in comparison_operators:
+                # Replace with spaces on both sides
+                fixed_query = fixed_query.replace(op, f" {op} ")
+                
+            # Normalize multiple spaces
+            fixed_query = re.sub(r'\s+', ' ', fixed_query)
+            
+            # Attempt to fix WHERE clauses by adding quotes around string values
+            # This is a heuristic and not perfect
+            where_pos = fixed_query.upper().find("WHERE")
+            if where_pos > 0:
+                where_clause = fixed_query[where_pos:]
+                # Find potential column-value comparisons
+                comparisons = re.findall(r'(\w+)\s*([<>=!]+)\s*(\w+)', where_clause)
+                for col, op, val in comparisons:
+                    # If value is not a number, add quotes
+                    if not val.isdigit() and val.lower() not in ['null', 'true', 'false']:
+                        # Don't add quotes if it's already quoted
+                        if not (val.startswith("'") and val.endswith("'")) and \
+                           not (val.startswith('"') and val.endswith('"')):
+                            replacement = f"{col} {op} '{val}'"
+                            pattern = f"{col}\\s*{op}\\s*{val}"
+                            fixed_query = re.sub(pattern, replacement, fixed_query)
+        else:
+            # Basic replacement - ensure there's at least one space around operators
+            for op in comparison_operators:
+                # Replace without surrounding spaces
+                pattern = r'(\S)' + re.escape(op) + r'(\S)'
+                replacement = r'\1 ' + op + r' \2'
+                fixed_query = re.sub(pattern, replacement, fixed_query)
+        
+        return fixed_query
     
     def close_all_connections(self):
         """Close all database connections"""

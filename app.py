@@ -311,6 +311,9 @@ def process_user_query(query):
     # Try to use LLM to generate SQL if Ollama is available
     use_llm = llm_processor.is_available()
     
+    # IMPORTANT: Track the actual SQL query that will be executed
+    sql_to_execute = None
+    
     if use_llm:
         with st.spinner("Generating SQL using DeepSeek-r1..."):
             try:
@@ -329,33 +332,54 @@ def process_user_query(query):
                     if not streaming_success:
                         st.warning(f"Streaming SQL generation failed: {sql_query}. Falling back to simple SQL generation.")
                         sql_query = simple_sql_generation(query, table_name)
+                        sql_text.code(sql_query, language="sql")
+                    else:
+                        # Make sure the display shows the extracted SQL
+                        sql_text.code(sql_query, language="sql")
+                    
+                    # Set the SQL to execute
+                    sql_to_execute = sql_query
+                    
                 else:
                     # Fall back to non-streaming method
                     success, sql_query = llm_processor.generate_sql(query, db_name, db_schema)
                     if not success:
                         st.warning(f"LLM error: {sql_query}. Falling back to simple SQL generation.")
                         sql_query = simple_sql_generation(query, table_name)
-                    else:
                         sql_text.code(sql_query, language="sql")
+                    else:
+                        # Display the extracted SQL
+                        sql_text.code(sql_query, language="sql")
+                    
+                    # Set the SQL to execute
+                    sql_to_execute = sql_query
+                    
+                # Log the final SQL
+                logger.info(f"Final SQL from LLM extraction: {sql_to_execute}")
+                    
             except Exception as e:
                 st.warning(f"Error during LLM SQL generation: {str(e)}. Falling back to simple SQL generation.")
                 sql_query = simple_sql_generation(query, table_name)
+                sql_text.code(sql_query, language="sql")
+                sql_to_execute = sql_query
     else:
         st.info("Ollama not available. Using simple SQL generation.")
         sql_query = simple_sql_generation(query, table_name)
+        st.subheader("Generated SQL")
+        st.code(sql_query, language="sql")
+        sql_to_execute = sql_query
     
-    # Validate SQL for basic syntax issues (looking for < character which is causing errors)
-    if "<" in sql_query or ">" in sql_query:
-        st.warning("Generated SQL contains potentially unsafe characters. Falling back to simple query.")
-        sql_query = f"SELECT * FROM {table_name} LIMIT 10"
-        # Update the display if we had to change the SQL
-        if 'sql_text' in locals():
-            sql_text.code(sql_query, language="sql")
+    # IMPORTANT: Make absolutely sure we're using the correct SQL query
+    # Display the final SQL query that will be executed
+    st.text("Executing query exactly as shown above")
+    
+    # Log the query that will be executed
+    logger.info(f"SQL query to execute: {sql_to_execute}")
     
     # Execute the query
     with st.spinner("Executing query..."):
         try:
-            success, results = db_connector.execute_query(db_name, sql_query)
+            success, results = db_connector.execute_query(db_name, sql_to_execute)
         
             if success:
                 if isinstance(results, dict) and "columns" in results and "data" in results:
@@ -382,7 +406,7 @@ def process_user_query(query):
                                     # If summarize_results_stream is available, use it
                                     if hasattr(llm_processor, 'summarize_results_stream'):
                                         streaming_success = llm_processor.summarize_results_stream(
-                                            query, df, sql_query, 
+                                            query, df, sql_to_execute, 
                                             callback=lambda text: insights_text.markdown(text)
                                         )
                                         if streaming_success:
@@ -390,14 +414,14 @@ def process_user_query(query):
                                             pass
                                         else:
                                             # Fall back to non-streaming
-                                            summary_success, summary = llm_processor.summarize_results(query, df, sql_query)
+                                            summary_success, summary = llm_processor.summarize_results(query, df, sql_to_execute)
                                             if summary_success:
                                                 insights_text.markdown(summary)
                                             else:
                                                 st.warning(f"Couldn't generate summary: {summary}")
                                     else:
                                         # Use traditional approach if streaming not available
-                                        summary_success, summary = llm_processor.summarize_results(query, df, sql_query)
+                                        summary_success, summary = llm_processor.summarize_results(query, df, sql_to_execute)
                                         if summary_success:
                                             insights_text.markdown(summary)
                                         else:
@@ -405,7 +429,7 @@ def process_user_query(query):
                                 except Exception as e:
                                     st.warning(f"Error with streaming insights: {str(e)}")
                                     # Fall back to traditional approach
-                                    summary_success, summary = llm_processor.summarize_results(query, df, sql_query)
+                                    summary_success, summary = llm_processor.summarize_results(query, df, sql_to_execute)
                                     if summary_success:
                                         insights_text.markdown(summary)
                                     else:
@@ -415,9 +439,32 @@ def process_user_query(query):
                 else:
                     st.success(results)
             else:
-                st.error(f"Query execution failed: {results}")
+                error_msg = results
+                # Show the error to the user
+                st.error(f"Query execution failed: {error_msg}")
+                
+                # Log the exact query that failed
+                logger.error(f"Failed query: {sql_to_execute}")
+                
+                # Special handling for specific errors
+                if "syntax error" in error_msg.lower():
+                    # Show error details but don't auto-fallback to simple query
+                    # Instead give advice on fixing the query
+                    db_type = db_connector.connections[db_name].get('type', 'unknown')
+                    st.warning(f"""
+                    This appears to be a syntax error in the SQL query. The database type is {db_type.upper()}.
+                    
+                    Common issues:
+                    - Date functions differ across databases (GETDATE() vs NOW() vs date('now'))
+                    - String comparison operators might need quotes
+                    - Some operators like TOP vs LIMIT vary across databases
+                    
+                    Try reformulating your query or providing more details.
+                    """)
         except Exception as e:
             st.error(f"Error during query execution: {str(e)}")
+            # Log the query that failed for debugging
+            logger.error(f"Failed query: {sql_to_execute}")
 
 def main():
     st.title("Multi-Database Query System")
