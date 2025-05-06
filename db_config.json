@@ -28,5 +28,10 @@
     "name": "sales_db",
     "type": "sqlite",
     "path": "databases\\sales.db"
+  },
+  {
+    "name": "test_db",
+    "type": "sqlite",
+    "path": "databases\\test.db"
   }
 ]

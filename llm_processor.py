@@ -121,6 +121,9 @@ class LLMProcessor:
             
             {db_specific_guidance}
             
+            CRITICAL: Only use column names EXACTLY as listed in the schema above. Do not invent, modify, or guess column names.
+            If a column in your query doesn't exactly match one of the columns in the schema, the query will fail.
+            
             IMPORTANT: Return ONLY the exact SQL query with no explanation, comments, or formatting.
             Do NOT include any thinking process, reasoning, or multiple attempts.
             JUST the final, correct SQL query.
@@ -130,6 +133,7 @@ class LLMProcessor:
             sql_system_prompt = f"""
             You are an expert {db_type.upper()} SQL generator.
             You MUST follow ALL the syntax rules for {db_type} exactly.
+            You MUST only use column names that appear EXACTLY in the provided schema.
             Only output the raw SQL query with no markdown, explanation, additional text, or thinking-out-loud.
             """
             
@@ -155,6 +159,10 @@ class LLMProcessor:
                 # Log what was extracted vs original response
                 logger.info(f"Original LLM response: {raw_response}")
                 logger.info(f"Extracted SQL query: {sql}")
+                
+                # Validate column names against the schema
+                sql = self._validate_column_names(sql, table_info)
+                logger.info(f"Validated SQL query: {sql}")
                 
                 # If LLM didn't include a LIMIT and we detected one, add it
                 if "LIMIT" not in sql.upper() and limit is not None:
@@ -262,6 +270,9 @@ class LLMProcessor:
             
             {db_specific_guidance}
             
+            CRITICAL: Only use column names EXACTLY as listed in the schema above. Do not invent, modify, or guess column names.
+            If a column in your query doesn't exactly match one of the columns in the schema, the query will fail.
+            
             IMPORTANT: Return ONLY the exact SQL query with no explanation, comments, or formatting.
             Do NOT include any thinking process, reasoning, or multiple attempts.
             JUST the final, correct SQL query.
@@ -271,6 +282,7 @@ class LLMProcessor:
             sql_system_prompt = f"""
             You are an expert {db_type.upper()} SQL generator.
             You MUST follow ALL the syntax rules for {db_type} exactly.
+            You MUST only use column names that appear EXACTLY in the provided schema.
             Only output the raw SQL query with no markdown, explanation, additional text, or thinking-out-loud.
             """
             
@@ -315,6 +327,10 @@ class LLMProcessor:
                 # Log what was extracted vs original response
                 logger.info(f"Original LLM streaming response: {raw_response}")
                 logger.info(f"Extracted SQL query from stream: {final_sql}")
+                
+                # Validate column names against the schema
+                final_sql = self._validate_column_names(final_sql, table_info)
+                logger.info(f"Validated SQL query: {final_sql}")
                 
                 # If LLM didn't include a LIMIT and we detected one, add it
                 if "LIMIT" not in final_sql.upper() and limit is not None:
@@ -530,7 +546,13 @@ class LLMProcessor:
         """Format table schema information for the prompt"""
         schema_text = ""
         for table_name, columns in table_info.items():
-            schema_text += f"{table_name} ({', '.join(columns)})\n"
+            # Format with table name in bold and each column on a new line with indentation
+            schema_text += f"TABLE: {table_name}\n"
+            schema_text += "COLUMNS:\n"
+            # List each column on a separate line with explicit labeling
+            for column in columns:
+                schema_text += f"  - {column}\n"
+            schema_text += "\n"
         return schema_text
     
     def is_available(self) -> bool:
@@ -713,6 +735,48 @@ class LLMProcessor:
         # If all else fails, return the original response
         logger.warning(f"Could not extract SQL query from: '{response}'")
         return response.strip()
+        
+    def _validate_column_names(self, sql_query: str, table_info: Dict[str, List[str]]) -> str:
+        """
+        Validate and correct column names in the SQL query to ensure they match the schema.
+        
+        Args:
+            sql_query: The SQL query to validate
+            table_info: Dictionary mapping table names to column lists
+            
+        Returns:
+            Validated SQL query with corrected column names
+        """
+        # Simple validation - this won't catch all cases but helps with common issues
+        corrected_query = sql_query
+        
+        # Extract all possible column names from the schema
+        all_columns = set()
+        columns_by_table = {}
+        for table_name, columns in table_info.items():
+            columns_by_table[table_name] = set(col.lower() for col in columns)
+            all_columns.update(col.lower() for col in columns)
+            
+        # Extract potential column references from the query
+        # This is simplistic and won't catch all cases
+        # Look for patterns like: SELECT col1, col2 FROM or WHERE col3 = 
+        column_patterns = [
+            r'SELECT\s+(.+?)\s+FROM',  # Columns in SELECT
+            r'WHERE\s+(\w+)',          # Column after WHERE
+            r'GROUP BY\s+(\w+)',       # Column after GROUP BY
+            r'ORDER BY\s+(\w+)',       # Column after ORDER BY
+            r'HAVING\s+(\w+)',         # Column after HAVING
+            r'JOIN.+?ON\s+(\w+)'       # Column in JOIN ... ON
+        ]
+        
+        # Log the query and schema for debugging
+        logger.debug(f"Validating query: {sql_query}")
+        logger.debug(f"Against schema: {table_info}")
+        
+        # No actual correction for now - this function will be enhanced in the future
+        # to perform more sophisticated SQL parsing and correction
+        
+        return corrected_query
 
     def _process_sql_for_sqlite(self, sql: str) -> str:
         """

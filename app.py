@@ -255,18 +255,16 @@ def process_user_query(query):
     
     # First attempt to find the right database and table using metadata manager
     with st.spinner("Finding relevant database and table..."):
-        # Extract potential table name from query (simplified approach)
-        # In a real implementation, this would use NLP to identify entities better
-        query_words = [word.lower() for word in query.split()]
-        
-        # First try to find explicit table mentions in the query
-        db_name = metadata_manager.get_database_for_query(query)
+        # Use the metadata manager to identify the database and table based on the query
+        db_name, table_name = metadata_manager.get_database_and_table(query)
         
         if not db_name:
-            # If no match by query analysis, try to match the last word as a table name
-            # This is a simplistic approach for demo purposes
-            potential_table = query_words[-1]
-            db_name = metadata_manager.get_database_for_table(potential_table)
+            # If no match by direct method, try to find explicit table mentions in the query
+            db_name = metadata_manager.get_database_for_query(query)
+            
+            if db_name:
+                # Try to get the table for this database
+                table_name = metadata_manager.get_table_for_query(query, db_name)
     
     if not db_name:
         st.error("Couldn't determine which database to query. Please try a more specific query that includes a table name.")
@@ -284,29 +282,22 @@ def process_user_query(query):
     # Get the database schema for the selected database
     db_schema = metadata_manager.get_database_metadata(db_name)
     
-    # Make sure we have a valid table
-    table_name = None
-    for word in query_words:
-        if word in db_schema:
-            table_name = word
-            break
-    
-    # If no valid table was found, use the last word but check if it's safe
-    if not table_name and query_words:
-        # Sanitize table name - strip special characters
-        potential_table = query_words[-1]
-        # Only use alphanumeric characters and underscores
-        table_name = ''.join(c for c in potential_table if c.isalnum() or c == '_')
+    # If we don't have a table name yet, try to find one
+    if not table_name and db_schema:
+        # Get all table names from the schema
+        table_names = list(db_schema.keys())
         
-        # Verify this table exists
-        if table_name not in db_schema:
-            # Try to find any valid table from the database
-            if db_schema:
-                table_name = list(db_schema.keys())[0]
-                st.warning(f"Table '{potential_table}' not found, using '{table_name}' instead.")
-            else:
-                st.error(f"No valid tables found in database {db_name}.")
-                return
+        # If there's only one table, use it
+        if len(table_names) == 1:
+            table_name = table_names[0]
+            st.info(f"Using table: {table_name}")
+        # Otherwise, use the first table but warn the user
+        elif len(table_names) > 1:
+            table_name = table_names[0]
+            st.warning(f"Multiple tables detected. Using {table_name}. For better results, specify a table in your query.")
+        else:
+            st.error(f"No tables found in database {db_name}.")
+            return
     
     # Try to use LLM to generate SQL if Ollama is available
     use_llm = llm_processor.is_available()

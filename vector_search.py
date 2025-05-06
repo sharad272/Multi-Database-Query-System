@@ -159,7 +159,7 @@ class VectorSearch:
                 # Process all tables
                 for table_name, columns in tables.items():
                     # Create description for the table
-                    table_desc = f"Table {table_name} in database {db_name} with columns: {', '.join(columns)}"
+                    table_desc = f"Table {table_name} in database {db_name} containing columns: {', '.join(columns)}"
                     table_embedding = self.model.encode(table_desc).tolist()
                     
                     # Add table record
@@ -172,8 +172,8 @@ class VectorSearch:
                     
                     # Process all columns
                     for column in columns:
-                        # Create description for the column
-                        column_desc = f"Column {column} in table {table_name} in database {db_name}"
+                        # Create description for the column - more detailed and specific
+                        column_desc = f"Column named '{column}' within table '{table_name}' in database '{db_name}'"
                         column_embedding = self.model.encode(column_desc).tolist()
                         
                         # Add column record
